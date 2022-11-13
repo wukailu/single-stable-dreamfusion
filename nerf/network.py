@@ -216,7 +216,65 @@ class NeRFNetwork(NeRFRenderer):
         ]        
 
         if self.bg_radius > 0:
-            # params.append({'params': self.encoder_bg.parameters(), 'lr': lr * 10})
             params.append({'params': self.bg_net.parameters(), 'lr': lr})
 
         return params
+
+
+class NeRFNetwork_Kailu(NeRFRenderer):
+    def __init__(self,
+                 opt,
+                 num_layers_bg=2,
+                 hidden_dim_bg=64,
+                 pretrained_load_from="",
+                 ):
+        super().__init__(opt)
+
+        from frameworks.nerf.modules import load_nerf
+        self.main_net = load_nerf(pretrained_load_from)
+
+        # background network
+        if self.bg_radius > 0:
+            self.num_layers_bg = num_layers_bg
+            self.hidden_dim_bg = hidden_dim_bg
+            self.encoder_bg, self.in_dim_bg = get_encoder('frequency', input_dim=3)
+            self.bg_net = MLP(self.in_dim_bg, 3, hidden_dim_bg, num_layers_bg, bias=True)
+
+        else:
+            self.bg_net = None
+
+    def to_our_coor(self, x):
+        return (x + self.bound) / (2 * self.bound) * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
+
+    def common_forward(self, x):
+        # 返回x对应的密度和颜色，最终的密度计算是 1-exp(sigma * dis)
+        # x: [N, 3], in [-bound, bound]
+        rays_pts = self.to_our_coor(x)
+        density = self.main_net.grid_sampler(rays_pts, self.main_net.density)[..., 0]
+        sigma = F.softplus(density + self.main_net.act_shift)
+        # sigma
+        # TODO: pass the weights from outside to speed up
+        albedo = torch.ones_like(x) * 0.5
+        valid_mask = sigma > 1e-4
+        albedo[valid_mask] = self.main_net.query_rgb(x[valid_mask], torch.ones_like(x[valid_mask])/(3**0.5))
+
+        return sigma, albedo
+
+    # optimizer utils
+    def get_params(self, lr):
+        freeze(self.main_net.density)
+        # freeze(self.main_net.k0)
+        # freeze(self.main_net.rgbnet)
+        params = [
+            {'params': self.main_net.parameters(), 'lr': lr},
+        ]
+
+        if self.bg_radius > 0:
+            params.append({'params': self.bg_net.parameters(), 'lr': lr})
+
+        return params
+
+
+def freeze(model: torch.nn.Module):
+    for param in model.parameters():
+        param.requires_grad = False

@@ -1,0 +1,1 @@
+from datasets.nerf.lib.load_tankstemple import load_tankstemple_data as load_blendedmvs_data
