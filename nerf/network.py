@@ -243,7 +243,9 @@ class NeRFNetwork_Kailu(NeRFNetwork):
             self.bg_net = None
 
     def to_our_coor(self, x):
-        return (x + self.bound) / (2 * self.bound) * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
+        scaled = (x + self.bound) / (2 * self.bound)[..., [0, 2, 1]]  # try swap y-z
+        scaled = scaled * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
+        return scaled
 
     def common_forward(self, x, weight=None):
         if weight is None:
@@ -256,8 +258,8 @@ class NeRFNetwork_Kailu(NeRFNetwork):
         # sigma
         albedo = torch.ones_like(x).float() * 0.5
         valid_mask = weight > 1e-2
-        masked_x = x[valid_mask]
-        masked_viewdirs = torch.ones_like(x[valid_mask])/(3**0.5)
+        masked_x = rays_pts[valid_mask]
+        masked_viewdirs = torch.ones_like(rays_pts[valid_mask])/(3**0.5)
         albedo[valid_mask] = self.main_net.query_rgb(masked_x, masked_viewdirs).float()
 
         return sigma, albedo
