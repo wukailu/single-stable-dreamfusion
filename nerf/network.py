@@ -243,7 +243,7 @@ class NeRFNetwork_Kailu(NeRFNetwork):
             self.bg_net = None
 
     def to_our_coor(self, x):
-        scaled = (x + self.bound) / (2 * self.bound)[..., [0, 2, 1]]  # try swap y-z
+        scaled = ((x + self.bound) / (2 * self.bound))[..., [0, 2, 1]]  # try swap y-z
         scaled = scaled * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
         return scaled
 
