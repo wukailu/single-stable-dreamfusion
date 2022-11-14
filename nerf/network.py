@@ -145,7 +145,7 @@ class NeRFNetwork(NeRFRenderer):
         normal[torch.isnan(normal)] = 0
         return normal
         
-    def forward(self, x, d, l=None, ratio=1, shading='albedo'):
+    def forward(self, x, d, l=None, ratio=1, shading='albedo', weight=None):
         # x: [N, 3], in [-bound, bound]
         # d: [N, 3], view direction, nomalized in [-1, 1]
         # l: [3], plane light direction, nomalized in [-1, 1]
@@ -221,17 +221,16 @@ class NeRFNetwork(NeRFRenderer):
         return params
 
 
-class NeRFNetwork_Kailu(NeRFRenderer):
-    def __init__(self,
-                 opt,
-                 num_layers_bg=2,
-                 hidden_dim_bg=64,
-                 pretrained_load_from="",
-                 ):
-        super().__init__(opt)
+class NeRFNetwork_Kailu(NeRFNetwork):
+    def __init__(self, opt, num_layers_bg=2, hidden_dim_bg=64, pretrained_load_from=""):
+        # NeRFRenderer.__init__(self, opt)
 
+        super(NeRFNetwork, self).__init__(opt)
         from frameworks.nerf.modules import load_nerf
         self.main_net = load_nerf(pretrained_load_from)
+        # to enable backward on grid_sample3d
+        import types
+        self.main_net.grid_sampler = types.MethodType(grid_sampler_with_grad, self.main_net)
 
         # background network
         if self.bg_radius > 0:
@@ -246,24 +245,27 @@ class NeRFNetwork_Kailu(NeRFRenderer):
     def to_our_coor(self, x):
         return (x + self.bound) / (2 * self.bound) * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
 
-    def common_forward(self, x):
+    def common_forward(self, x, weight=None):
+        if weight is None:
+            weight = torch.ones_like(x[..., 0])
         # 返回x对应的密度和颜色，最终的密度计算是 1-exp(sigma * dis)
         # x: [N, 3], in [-bound, bound]
         rays_pts = self.to_our_coor(x)
         density = self.main_net.grid_sampler(rays_pts, self.main_net.density)[..., 0]
         sigma = F.softplus(density + self.main_net.act_shift)
         # sigma
-        # TODO: pass the weights from outside to speed up
-        albedo = torch.ones_like(x) * 0.5
-        valid_mask = sigma > 1e-4
-        albedo[valid_mask] = self.main_net.query_rgb(x[valid_mask], torch.ones_like(x[valid_mask])/(3**0.5))
+        albedo = torch.ones_like(x).float() * 0.5
+        valid_mask = weight > 1e-2
+        masked_x = x[valid_mask]
+        masked_viewdirs = torch.ones_like(x[valid_mask])/(3**0.5)
+        albedo[valid_mask] = self.main_net.query_rgb(masked_x, masked_viewdirs).float()
 
         return sigma, albedo
 
     # optimizer utils
     def get_params(self, lr):
-        freeze(self.main_net.density)
-        # freeze(self.main_net.k0)
+        self.main_net.density.requires_grad = False
+        # self.main_net.k0.requires_grad = False
         # freeze(self.main_net.rgbnet)
         params = [
             {'params': self.main_net.parameters(), 'lr': lr},
@@ -274,7 +276,43 @@ class NeRFNetwork_Kailu(NeRFRenderer):
 
         return params
 
+    def forward(self, x, d, l=None, ratio=1, shading='albedo', weight=None):
+        # x: [N, 3], in [-bound, bound]
+        # d: [N, 3], view direction, nomalized in [-1, 1]
+        # l: [3], plane light direction, nomalized in [-1, 1]
+        # ratio: scalar, ambient ratio, 1 == no shading (albedo only), 0 == only shading (textureless)
+
+        if shading == 'albedo':
+            # no need to query normal
+            sigma, color = self.common_forward(x, weight)
+            normal = None
+
+        else:
+            # query normal
+
+            sigma, albedo = self.common_forward(x, weight)
+            normal = self.normal(x)
+
+            # lambertian shading
+            lambertian = ratio + (1 - ratio) * (normal @ l).clamp(min=0)  # [N,]
+
+            if shading == 'textureless':
+                color = lambertian.unsqueeze(-1).repeat(1, 3)
+            elif shading == 'normal':
+                color = (normal + 1) / 2
+            else:  # 'lambertian'
+                color = albedo * lambertian.unsqueeze(-1)
+
+        return sigma, color, normal
 
 def freeze(model: torch.nn.Module):
     for param in model.parameters():
         param.requires_grad = False
+
+def grid_sampler_with_grad(self, xyz, grid):
+    '''Wrapper for the interp operation'''
+    shape = xyz.shape[:-1]
+    xyz = xyz.reshape(1, 1, 1, -1, 3)
+    ind_norm = ((xyz - self.xyz_min) / (self.xyz_max - self.xyz_min)).flip((-1,)) * 2 - 1
+    from frameworks.nerf.modules.osr_fine import grid_sample_3d
+    return grid_sample_3d(grid, ind_norm).reshape(grid.shape[1], -1).T.reshape(*shape, grid.shape[1])

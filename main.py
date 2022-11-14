@@ -7,8 +7,6 @@ from optimizer import Shampoo
 
 from nerf.gui import NeRFGUI
 
-# torch.autograd.set_detect_anomaly(True)
-
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -87,7 +85,6 @@ if __name__ == '__main__':
 
     if opt.backbone == 'vanilla':
         from nerf.network import NeRFNetwork
-
         opt.lambda_entropy = 0
         opt.lambda_opacity = 1e-3
 
@@ -100,7 +97,9 @@ if __name__ == '__main__':
 
     seed_everything(opt.seed)
 
-    model = NeRFNetwork(opt)
+    # model = NeRFNetwork(opt)
+    from nerf.network import NeRFNetwork_Kailu
+    model = NeRFNetwork_Kailu(opt, pretrained_load_from="/data/nerfedit/extra/nerf_ficus_nopose.dvgo")
 
     print(model)
 
