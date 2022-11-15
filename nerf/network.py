@@ -243,7 +243,8 @@ class NeRFNetwork_Kailu(NeRFNetwork):
             self.bg_net = None
 
     def to_our_coor(self, x):
-        scaled = ((x + self.bound) / (2 * self.bound))[..., [0, 2, 1]]  # try swap y-z
+        scaled = ((x + self.bound) / (2 * self.bound))[..., [0, 2, 1]]  # swap y-z
+        scaled = (scaled - 0.5) * 1.25 + 0.5  # scale
         scaled = scaled * (self.main_net.xyz_max - self.main_net.xyz_min) + self.main_net.xyz_min
         return scaled
 
@@ -253,11 +254,13 @@ class NeRFNetwork_Kailu(NeRFNetwork):
         # 返回x对应的密度和颜色，最终的密度计算是 1-exp(sigma * dis)
         # x: [N, 3], in [-bound, bound]
         rays_pts = self.to_our_coor(x)
-        density = self.main_net.grid_sampler(rays_pts, self.main_net.density)[..., 0]
+        inside_mask = ((rays_pts <= self.main_net.xyz_max) & (self.main_net.xyz_min <= rays_pts)).all(dim=-1)
+        density = torch.zeros_like(x[..., 0])
+        density[inside_mask] = self.main_net.grid_sampler(rays_pts[inside_mask], self.main_net.density)[..., 0]
         sigma = F.softplus(density + self.main_net.act_shift)
         # sigma
         albedo = torch.ones_like(x).float() * 0.5
-        valid_mask = weight > 1e-2
+        valid_mask = (weight > (1e-2 + self.main_net.act_shift)) & inside_mask
         masked_x = rays_pts[valid_mask]
         masked_viewdirs = torch.ones_like(rays_pts[valid_mask])/(3**0.5)
         albedo[valid_mask] = self.main_net.query_rgb(masked_x, masked_viewdirs).float()
