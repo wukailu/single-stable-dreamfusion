@@ -257,7 +257,7 @@ class NeRFNetwork_Kailu(NeRFNetwork):
         inside_mask = ((rays_pts <= self.main_net.xyz_max) & (self.main_net.xyz_min <= rays_pts)).all(dim=-1)
         density = torch.zeros_like(x[..., 0])
         density[inside_mask] = self.main_net.grid_sampler(rays_pts[inside_mask], self.main_net.density)[..., 0]
-        sigma = F.softplus(density + self.main_net.act_shift)
+        sigma = F.softplus(density + self.main_net.act_shift) * 10
         # sigma
         albedo = torch.ones_like(x).float() * 0.5
         valid_mask = (weight > (1e-2 + self.main_net.act_shift)) & inside_mask
@@ -270,10 +270,11 @@ class NeRFNetwork_Kailu(NeRFNetwork):
     # optimizer utils
     def get_params(self, lr):
         self.main_net.density.requires_grad = False
-        # self.main_net.k0.requires_grad = False
+        self.main_net.k0.requires_grad = False
         # freeze(self.main_net.rgbnet)
         params = [
-            {'params': self.main_net.parameters(), 'lr': lr},
+            # {'params': self.main_net.parameters(), 'lr': lr},
+            {'params': self.main_net.rgbnet.parameters(), 'lr': lr},
         ]
 
         if self.bg_radius > 0:
